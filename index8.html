@@ -562,7 +562,7 @@
             </div>
             
             <div class="control-group">
-                <label>佈局模式</label>
+                <label>圖形選擇</label>
                 <div class="layout-toggle">
                     <button class="layout-btn active" data-layout="force">樹狀網路圖</button>
                     <button class="layout-btn" data-layout="circle">圓形網路圖</button>
@@ -613,6 +613,15 @@
             linkYear: [],
             linkType: []
         };
+
+        // 是否已經初始化視覺化
+        let visualizationInitialized = false;
+        
+        // 是否已選擇初始節點
+        let initialNodeSelected = false;
+        
+        // 當前選擇的中心節點
+        let centerNode = null;
 
         // 動態顏色配置
         let nodeColors = {};
@@ -781,22 +790,41 @@
                 return;
             }
 
-            const targetNode = filteredNodes.find(node => 
+            const targetNode = sampleNodes.find(node => 
                 node.name.toLowerCase() === nodeName.toLowerCase()
             );
 
             if (!targetNode) {
-                alert('找不到該節點，請檢查節點名稱或調整篩選條件');
+                alert('找不到該節點，請檢查節點名稱');
                 return;
             }
 
+            // 設定中心節點和搜尋節點
+            centerNode = targetNode.name;
             searchedNode = targetNode.name;
+            initialNodeSelected = true;
             
-            // 更新視覺化以高亮目標節點
-            updateVisualization();
+            // 篩選出第一層連結的資料
+            filterDataForCenterNode();
+            
+            // 啟用篩選控制項
+            enableFilterControls();
+            
+            // 創建或更新視覺化
+            if (!visualizationInitialized) {
+                createVisualization();
+                visualizationInitialized = true;
+            } else {
+                updateVisualization();
+            }
             
             // 將視圖中心移動到目標節點
-            centerOnNode(targetNode);
+            setTimeout(() => {
+                const targetNodeInFiltered = filteredNodes.find(node => node.name === targetNode.name);
+                if (targetNodeInFiltered) {
+                    centerOnNode(targetNodeInFiltered);
+                }
+            }, 500);
         }
 
         function centerOnNode(targetNode) {
@@ -823,16 +851,24 @@
             const searchInput = document.getElementById('nodeSearch');
             searchInput.value = '';
             searchedNode = null;
+            centerNode = null;
+            initialNodeSelected = false;
             hideSuggestions();
             
-            // 重新更新視覺化以移除高亮效果
-            updateVisualization();
+            // 移除所有篩選
+            selectedFilters.linkYear = [];
+            selectedFilters.linkType = [];
             
-            // 重置視圖
-            if (svg) {
-                svg.transition()
-                    .duration(500)
-                    .call(zoom.transform, d3.zoomIdentity);
+            // 禁用篩選控制項
+            disableFilterControls();
+            
+            // 清空篩選選項
+            clearFilterSelections();
+            
+            // 重置視覺化
+            if (visualizationInitialized) {
+                showInitialMessage();
+                visualizationInitialized = false;
             }
         }
 
@@ -978,8 +1014,8 @@
             setupEventListeners();
             setupZoomControls();
             setupSearchFunctionality();
-            createVisualization(); // 先創建視覺化元素
-            filterData(); // 然後進行篩選
+            disableFilterControls(); // 初始狀態禁用篩選控制
+            showInitialMessage(); // 顯示初始提示訊息
             updateLegend();
         }
 
@@ -1021,6 +1057,11 @@
         }
 
         function updateFilter(filterType, value, isChecked) {
+            // 只有在已選擇初始節點後才能使用篩選
+            if (!initialNodeSelected) {
+                return;
+            }
+            
             if (isChecked) {
                 if (!selectedFilters[filterType].includes(value)) {
                     selectedFilters[filterType].push(value);
@@ -1028,18 +1069,42 @@
             } else {
                 selectedFilters[filterType] = selectedFilters[filterType].filter(item => item !== value);
             }
-            filterData();
+            
+            // 篩選以中心節點為基礎的資料
+            filterDataForCenterNode();
+            
+            // 更新視覺化
+            updateVisualization();
         }
 
         function toggleSelectAll(filterType) {
+            // 只有在已選擇初始節點後才能使用篩選
+            if (!initialNodeSelected) {
+                return;
+            }
+            
             const container = document.getElementById(`${filterType}Select`);
             const checkboxes = container.querySelectorAll('input[type="checkbox"]');
             const allChecked = Array.from(checkboxes).every(cb => cb.checked);
             
             checkboxes.forEach(checkbox => {
                 checkbox.checked = !allChecked;
-                updateFilter(filterType, checkbox.value, checkbox.checked);
             });
+            
+            // 批次更新篩選條件
+            if (!allChecked) {
+                // 全選
+                selectedFilters[filterType] = Array.from(checkboxes).map(cb => cb.value);
+            } else {
+                // 取消全選
+                selectedFilters[filterType] = [];
+            }
+            
+            // 篩選以中心節點為基礎的資料
+            filterDataForCenterNode();
+            
+            // 更新視覺化
+            updateVisualization();
         }
 
         // 設置事件監聽器
@@ -1075,32 +1140,217 @@
             });
         }
 
-        // 篩選資料 - 根據年份和連結類型篩選
-        function filterData() {
-            // 先篩選連結
-            filteredLinks = sampleLinks.filter(link => {
+        // 顯示初始提示訊息
+        function showInitialMessage() {
+            const container = document.getElementById('network-container');
+            
+            // 清除現有內容
+            d3.select('#network-container svg').remove();
+            d3.select('#network-container .initial-message').remove();
+            
+            // 創建提示訊息
+            const messageDiv = d3.select('#network-container')
+                .append('div')
+                .attr('class', 'initial-message')
+                .style('display', 'flex')
+                .style('flex-direction', 'column')
+                .style('align-items', 'center')
+                .style('justify-content', 'center')
+                .style('height', '100%')
+                .style('text-align', 'center')
+                .style('color', '#666')
+                .style('font-size', '18px')
+                .style('padding', '50px');
+            
+            messageDiv.append('div')
+                .style('font-size', '4rem')
+                .style('margin-bottom', '20px')
+                .style('opacity', '0.3')
+                .text('🔍');
+            
+            messageDiv.append('h3')
+                .style('margin', '0 0 15px 0')
+                .style('color', '#333')
+                .style('font-weight', 'normal')
+                .text('歡迎使用網路關係圖');
+            
+            messageDiv.append('p')
+                .style('margin', '0 0 10px 0')
+                .style('line-height', '1.6')
+                .style('color', '#333')
+                .style('font-weight', '500')
+                .text('請先搜尋一個節點來開始探索');
+            
+            messageDiv.append('p')
+                .style('margin', '0')
+                .style('font-size', '14px')
+                .style('opacity', '0.8')
+                .text('搜尋後將顯示該節點及其第一層連結，然後可以進行篩選');
+            
+            // 重置相關變數
+            filteredNodes = [];
+            filteredLinks = [];
+            consolidatedLinks = [];
+            searchedNode = null;
+            
+            // 清空搜尋框
+            const searchInput = document.getElementById('nodeSearch');
+            if (searchInput) {
+                searchInput.value = '';
+            }
+            
+            // 更新圖例
+            updateLegend();
+        }
+
+        // 篩選以中心節點為基礎的資料
+        function filterDataForCenterNode() {
+            if (!centerNode) {
+                filteredNodes = [];
+                filteredLinks = [];
+                consolidatedLinks = [];
+                return;
+            }
+            
+            // 找出與中心節點直接連接的所有連結
+            const firstLayerLinks = sampleLinks.filter(link => 
+                link.from === centerNode || link.to === centerNode
+            );
+            
+            // 根據年份和類型篩選連結
+            filteredLinks = firstLayerLinks.filter(link => {
                 return (selectedFilters.linkYear.length === 0 || selectedFilters.linkYear.includes(link.year)) &&
                        (selectedFilters.linkType.length === 0 || selectedFilters.linkType.includes(link.type));
             });
-
-            // 根據篩選後的連結決定顯示哪些節點
-            const nodeNames = new Set();
+            
+            // 如果沒有篩選條件，就顯示所有第一層連結
+            if (selectedFilters.linkYear.length === 0 && selectedFilters.linkType.length === 0) {
+                filteredLinks = firstLayerLinks;
+            }
+            
+            // 收集所有相關節點
+            const nodeNames = new Set([centerNode]); // 一定包含中心節點
             filteredLinks.forEach(link => {
                 nodeNames.add(link.from);
                 nodeNames.add(link.to);
             });
 
             filteredNodes = sampleNodes.filter(node => nodeNames.has(node.name));
-
             consolidatedLinks = consolidateLinks(filteredLinks);
-
-            // 只有在視覺化元素已經創建後才更新
-            if (g) {
-                updateVisualization();
-            }
+            
+            // 更新篩選選項
+            updateFilterOptions();
+            
             if (document.getElementById('legend')) {
                 updateLegend();
             }
+        }
+        
+        // 啟用篩選控制項
+        function enableFilterControls() {
+            const yearContainer = document.getElementById('linkYearSelect');
+            const typeContainer = document.getElementById('linkTypeSelect');
+            const yearLabel = document.querySelector('label[for="linkYearSelect"]');
+            const typeLabel = document.querySelector('label[for="linkTypeSelect"]');
+            
+            // 移除禁用樣式
+            if (yearContainer) {
+                yearContainer.style.opacity = '1';
+                yearContainer.style.pointerEvents = 'auto';
+            }
+            if (typeContainer) {
+                typeContainer.style.opacity = '1';
+                typeContainer.style.pointerEvents = 'auto';
+            }
+            
+            // 啟用所有相關按鈕
+            document.querySelectorAll('.select-all-btn').forEach(btn => {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            });
+        }
+        
+        // 禁用篩選控制項
+        function disableFilterControls() {
+            const yearContainer = document.getElementById('linkYearSelect');
+            const typeContainer = document.getElementById('linkTypeSelect');
+            
+            // 加入禁用樣式
+            if (yearContainer) {
+                yearContainer.style.opacity = '0.5';
+                yearContainer.style.pointerEvents = 'none';
+            }
+            if (typeContainer) {
+                typeContainer.style.opacity = '0.5';
+                typeContainer.style.pointerEvents = 'none';
+            }
+            
+            // 禁用所有相關按鈕
+            document.querySelectorAll('.select-all-btn').forEach(btn => {
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+            });
+        }
+        
+        // 清空篩選選項
+        function clearFilterSelections() {
+            // 清空年份選擇
+            const yearCheckboxes = document.querySelectorAll('#linkYearSelect input[type="checkbox"]');
+            yearCheckboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            
+            // 清空類型選擇
+            const typeCheckboxes = document.querySelectorAll('#linkTypeSelect input[type="checkbox"]');
+            typeCheckboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+        }
+        
+        // 更新篩選選項（基於當前中心節點的可用選項）
+        function updateFilterOptions() {
+            if (!centerNode) return;
+            
+            // 找出與中心節點相關的所有連結
+            const centerNodeLinks = sampleLinks.filter(link => 
+                link.from === centerNode || link.to === centerNode
+            );
+            
+            // 取得可用的年份和類型
+            const availableYears = [...new Set(centerNodeLinks.map(link => link.year))].sort((a, b) => b - a);
+            const availableTypes = [...new Set(centerNodeLinks.map(link => link.type))];
+            
+            // 更新年份選項 - 只顯示相關的年份
+            updateSelectContainer('linkYearSelect', availableYears, 'linkYear');
+            
+            // 更新類型選項 - 只顯示相關的類型
+            updateSelectContainer('linkTypeSelect', availableTypes, 'linkType');
+        }
+        
+        // 更新選擇容器
+        function updateSelectContainer(containerId, options, filterType) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = ''; // 清空現有內容
+            
+            options.forEach(option => {
+                const item = document.createElement('div');
+                item.className = 'checkbox-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `${filterType}_${option}`;
+                checkbox.value = option;
+                checkbox.checked = selectedFilters[filterType].includes(option);
+                checkbox.addEventListener('change', () => updateFilter(filterType, option, checkbox.checked));
+                
+                const label = document.createElement('label');
+                label.htmlFor = checkbox.id;
+                label.textContent = option;
+                
+                item.appendChild(checkbox);
+                item.appendChild(label);
+                container.appendChild(item);
+            });
         }
 
         // 創建視覺化
@@ -1114,6 +1364,8 @@
             console.log('Filtered links:', filteredLinks.length);
             console.log('Consolidated links:', consolidatedLinks.length);
 
+            // 清除初始訊息和舊的 SVG
+            d3.select('#network-container .initial-message').remove();
             d3.select('#network-container svg').remove();
 
             svg = d3.select('#network-container')
@@ -1601,68 +1853,74 @@
             
             let legendHTML = '';
 
-            // 節點類型區塊
-            const visibleNodeTypes = [...new Set(filteredNodes.map(node => node.type))];
-            if (visibleNodeTypes.length > 0) {
-                legendHTML += '<div class="legend-section">';
-                legendHTML += '<h5>節點類型</h5>';
-                visibleNodeTypes.forEach(type => {
-                    const color = nodeColors[type] || '#999';
+            // 只有在有資料時才顯示圖例內容
+            if (filteredNodes.length > 0 || filteredLinks.length > 0) {
+                // 節點類型區塊
+                const visibleNodeTypes = [...new Set(filteredNodes.map(node => node.type))];
+                if (visibleNodeTypes.length > 0) {
+                    legendHTML += '<div class="legend-section">';
+                    legendHTML += '<h5>節點類型</h5>';
+                    visibleNodeTypes.forEach(type => {
+                        const color = nodeColors[type] || '#999';
+                        legendHTML += `
+                            <div class="legend-item">
+                                <div class="legend-color" style="background-color: ${color}"></div>
+                                <span>${type}</span>
+                            </div>
+                        `;
+                    });
+                    legendHTML += '</div>';
+                }
+
+                // 連結類型區塊
+                const visibleLinkTypes = [...new Set(filteredLinks.map(link => link.type))];
+                if (visibleLinkTypes.length > 0) {
+                    legendHTML += '<div class="legend-section">';
+                    legendHTML += '<h5>連結類型</h5>';
+                    visibleLinkTypes.forEach(type => {
+                        const color = linkColors[type] || '#999';
+                        legendHTML += `
+                            <div class="legend-item">
+                                <div class="legend-line" style="background-color: ${color};"></div>
+                                <span>${type}</span>
+                            </div>
+                        `;
+                    });
+                    legendHTML += '</div>';
+                }
+
+                // 連結樣式區塊
+                if (consolidatedLinks.some(link => link.isMultiLink)) {
+                    legendHTML += '<div class="legend-section">';
+                    legendHTML += '<h5>連結樣式</h5>';
                     legendHTML += `
                         <div class="legend-item">
-                            <div class="legend-color" style="background-color: ${color}"></div>
-                            <span>${type}</span>
+                            <div class="legend-dashed"></div>
+                            <span>多重連結</span>
                         </div>
                     `;
-                });
-                legendHTML += '</div>';
-            }
+                    legendHTML += '</div>';
+                }
 
-            // 連結類型區塊
-            const visibleLinkTypes = [...new Set(filteredLinks.map(link => link.type))];
-            if (visibleLinkTypes.length > 0) {
-                legendHTML += '<div class="legend-section">';
-                legendHTML += '<h5>連結類型</h5>';
-                visibleLinkTypes.forEach(type => {
-                    const color = linkColors[type] || '#999';
+                // 搜尋狀態說明
+                if (searchedNode) {
+                    legendHTML += '<div class="legend-section">';
+                    legendHTML += '<h5>搜尋狀態</h5>';
                     legendHTML += `
                         <div class="legend-item">
-                            <div class="legend-line" style="background-color: ${color};"></div>
-                            <span>${type}</span>
+                            <div class="legend-color" style="background-color: #667eea; border: 2px solid #667eea;"></div>
+                            <span>聚焦節點</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #ccc; opacity: 0.5;"></div>
+                            <span>非相關節點</span>
                         </div>
                     `;
-                });
-                legendHTML += '</div>';
-            }
-
-            // 連結樣式區塊
-            if (consolidatedLinks.some(link => link.isMultiLink)) {
-                legendHTML += '<div class="legend-section">';
-                legendHTML += '<h5>連結樣式</h5>';
-                legendHTML += `
-                    <div class="legend-item">
-                        <div class="legend-dashed"></div>
-                        <span>多重連結</span>
-                    </div>
-                `;
-                legendHTML += '</div>';
-            }
-
-            // 搜尋狀態說明
-            if (searchedNode) {
-                legendHTML += '<div class="legend-section">';
-                legendHTML += '<h5>搜尋狀態</h5>';
-                legendHTML += `
-                    <div class="legend-item">
-                        <div class="legend-color" style="background-color: #667eea; border: 2px solid #667eea;"></div>
-                        <span>聚焦節點</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background-color: #ccc; opacity: 0.5;"></div>
-                        <span>非相關節點</span>
-                    </div>
-                `;
-                legendHTML += '</div>';
+                    legendHTML += '</div>';
+                }
+            } else {
+                // 沒有資料時顯示提示
+                legendHTML = '<div style="text-align: center; color: #999; padding: 20px; font-size: 14px;">選擇篩選條件後將顯示圖例</div>';
             }
 
             legendContent.innerHTML = legendHTML;
