@@ -518,6 +518,62 @@
             transform: none;
             box-shadow: none;
         }
+        
+        .layer-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .layer-buttons {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .layer-btn {
+            flex: 1;
+            min-width: 45px;
+            padding: 8px 10px;
+            font-size: 12px;
+            background: #f8f9fa;
+            color: #666;
+            border: 1px solid #e1e8ed;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: none;
+            letter-spacing: normal;
+            font-weight: 500;
+        }
+        
+        .layer-btn:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .layer-btn.active {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .layer-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        
+        .layer-info {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+            padding: 5px;
+            background: rgba(102, 126, 234, 0.05);
+            border-radius: 6px;
+            line-height: 1.3;
+        }
 
         .no-data-message {
             text-align: center;
@@ -544,6 +600,22 @@
                 <div class="search-buttons">
                     <button class="search-btn focus" onclick="focusOnSearchedNode()">聚焦</button>
                     <button class="search-btn clear" onclick="clearSearch()">清除</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>連結層級</label>
+                <div class="layer-controls" id="layerControls">
+                    <div class="layer-buttons">
+                        <button class="layer-btn active" data-layer="1">1層</button>
+                        <button class="layer-btn" data-layer="2">2層</button>
+                        <button class="layer-btn" data-layer="3">3層</button>
+                        <button class="layer-btn" data-layer="4">4層</button>
+                        <button class="layer-btn" data-layer="5">5層</button>
+                    </div>
+                    <div class="layer-info">
+                        <span id="layerInfo">選擇中心節點後可調整層級</span>
+                    </div>
                 </div>
             </div>
             
@@ -622,6 +694,9 @@
         
         // 當前選擇的中心節點
         let centerNode = null;
+        
+        // 當前選擇的層級數
+        let selectedLayers = 1;
 
         // 動態顏色配置
         let nodeColors = {};
@@ -810,6 +885,9 @@
             // 啟用篩選控制項
             enableFilterControls();
             
+            // 啟用層級控制
+            enableLayerControls();
+            
             // 創建或更新視覺化
             if (!visualizationInitialized) {
                 createVisualization();
@@ -853,6 +931,7 @@
             searchedNode = null;
             centerNode = null;
             initialNodeSelected = false;
+            selectedLayers = 1; // 重置層級為1
             hideSuggestions();
             
             // 移除所有篩選
@@ -861,6 +940,9 @@
             
             // 禁用篩選控制項
             disableFilterControls();
+            
+            // 禁用層級控制
+            disableLayerControls();
             
             // 清空篩選選項
             clearFilterSelections();
@@ -1014,7 +1096,9 @@
             setupEventListeners();
             setupZoomControls();
             setupSearchFunctionality();
+            setupLayerControls(); // 設置層級控制
             disableFilterControls(); // 初始狀態禁用篩選控制
+            disableLayerControls(); // 初始狀態禁用層級控制
             showInitialMessage(); // 顯示初始提示訊息
             updateLegend();
         }
@@ -1212,20 +1296,18 @@
                 return;
             }
             
-            // 找出與中心節點直接連接的所有連結
-            const firstLayerLinks = sampleLinks.filter(link => 
-                link.from === centerNode || link.to === centerNode
-            );
+            // 找出指定層級的所有連結
+            const layerLinks = getLinksUpToLayer(centerNode, selectedLayers);
             
             // 根據年份和類型篩選連結
-            filteredLinks = firstLayerLinks.filter(link => {
+            filteredLinks = layerLinks.filter(link => {
                 return (selectedFilters.linkYear.length === 0 || selectedFilters.linkYear.includes(link.year)) &&
                        (selectedFilters.linkType.length === 0 || selectedFilters.linkType.includes(link.type));
             });
             
-            // 如果沒有篩選條件，就顯示所有第一層連結
+            // 如果沒有篩選條件，就顯示所有指定層級的連結
             if (selectedFilters.linkYear.length === 0 && selectedFilters.linkType.length === 0) {
-                filteredLinks = firstLayerLinks;
+                filteredLinks = layerLinks;
             }
             
             // 收集所有相關節點
@@ -1240,6 +1322,9 @@
             
             // 更新篩選選項
             updateFilterOptions();
+            
+            // 更新層級資訊
+            updateLayerInfo();
             
             if (document.getElementById('legend')) {
                 updateLegend();
@@ -1311,10 +1396,8 @@
         function updateFilterOptions() {
             if (!centerNode) return;
             
-            // 找出與中心節點相關的所有連結
-            const centerNodeLinks = sampleLinks.filter(link => 
-                link.from === centerNode || link.to === centerNode
-            );
+            // 找出與中心節點相關的所有連結（當前層級）
+            const centerNodeLinks = getLinksUpToLayer(centerNode, selectedLayers);
             
             // 取得可用的年份和類型
             const availableYears = [...new Set(centerNodeLinks.map(link => link.year))].sort((a, b) => b - a);
@@ -1351,6 +1434,129 @@
                 item.appendChild(label);
                 container.appendChild(item);
             });
+        }
+        
+        // 設置層級控制
+        function setupLayerControls() {
+            document.querySelectorAll('.layer-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    if (!initialNodeSelected) return; // 只有在已選擇初始節點後才能使用
+                    
+                    const layer = parseInt(e.target.dataset.layer);
+                    selectedLayers = layer;
+                    
+                    // 更新按鈕狀態
+                    document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+                    e.target.classList.add('active');
+                    
+                    // 重新篩選資料
+                    filterDataForCenterNode();
+                    
+                    // 更新視覺化
+                    updateVisualization();
+                });
+            });
+        }
+        
+        // 啟用層級控制
+        function enableLayerControls() {
+            const layerControls = document.getElementById('layerControls');
+            if (layerControls) {
+                layerControls.style.opacity = '1';
+                layerControls.style.pointerEvents = 'auto';
+            }
+            
+            document.querySelectorAll('.layer-btn').forEach(btn => {
+                btn.disabled = false;
+            });
+        }
+        
+        // 禁用層級控制
+        function disableLayerControls() {
+            const layerControls = document.getElementById('layerControls');
+            if (layerControls) {
+                layerControls.style.opacity = '0.5';
+                layerControls.style.pointerEvents = 'none';
+            }
+            
+            document.querySelectorAll('.layer-btn').forEach(btn => {
+                btn.disabled = true;
+            });
+            
+            // 重置為第一層
+            document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+            document.querySelector('.layer-btn[data-layer="1"]').classList.add('active');
+            selectedLayers = 1;
+        }
+        
+        // 獲取指定層級的所有連結
+        function getLinksUpToLayer(centerNodeName, maxLayers) {
+            if (maxLayers <= 0) return [];
+            
+            const visitedNodes = new Set();
+            const resultLinks = [];
+            let currentLayerNodes = new Set([centerNodeName]);
+            
+            for (let layer = 1; layer <= maxLayers; layer++) {
+                const nextLayerNodes = new Set();
+                
+                currentLayerNodes.forEach(nodeName => {
+                    if (visitedNodes.has(nodeName)) return;
+                    visitedNodes.add(nodeName);
+                    
+                    // 找出與當前節點連接的所有連結
+                    const nodeLinks = sampleLinks.filter(link => 
+                        link.from === nodeName || link.to === nodeName
+                    );
+                    
+                    nodeLinks.forEach(link => {
+                        // 避免重複添加相同的連結
+                        const linkKey = `${link.from}-${link.to}-${link.type}-${link.year}`;
+                        const reverseLinkKey = `${link.to}-${link.from}-${link.type}-${link.year}`;
+                        
+                        const isDuplicate = resultLinks.some(existingLink => {
+                            const existingKey = `${existingLink.from}-${existingLink.to}-${existingLink.type}-${existingLink.year}`;
+                            const existingReverseKey = `${existingLink.to}-${existingLink.from}-${existingLink.type}-${existingLink.year}`;
+                            return existingKey === linkKey || existingReverseKey === linkKey || 
+                                   existingKey === reverseLinkKey || existingReverseKey === reverseLinkKey;
+                        });
+                        
+                        if (!isDuplicate) {
+                            resultLinks.push(link);
+                        }
+                        
+                        // 添加下一層的節點
+                        if (layer < maxLayers) {
+                            const otherNode = link.from === nodeName ? link.to : link.from;
+                            if (!visitedNodes.has(otherNode)) {
+                                nextLayerNodes.add(otherNode);
+                            }
+                        }
+                    });
+                });
+                
+                // 準備下一層
+                currentLayerNodes = nextLayerNodes;
+                
+                if (currentLayerNodes.size === 0) break; // 沒有更多節點了
+            }
+            
+            return resultLinks;
+        }
+        
+        // 更新層級資訊
+        function updateLayerInfo() {
+            const layerInfo = document.getElementById('layerInfo');
+            if (!layerInfo) return;
+            
+            if (!centerNode) {
+                layerInfo.textContent = '選擇中心節點後可調整層級';
+                return;
+            }
+            
+            const nodeCount = filteredNodes.length - 1; // 減去中心節點
+            const linkCount = filteredLinks.length;
+            layerInfo.textContent = `第${selectedLayers}層：${nodeCount}個節點，${linkCount}個連結`;
         }
 
         // 創建視覺化
